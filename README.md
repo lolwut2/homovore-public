@@ -4,7 +4,7 @@
 
 <h1 align="center">Homovore</h1>
 
-### Join our discord - https://discord.gg/Ftf6RgvcGr
+### Join our discord: https://discord.gg/Ftf6RgvcGr
 
 <p align="center">
   <a href="https://github.com/leonetics/homovore-public/releases">

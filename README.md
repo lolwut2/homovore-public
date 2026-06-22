@@ -27,6 +27,19 @@ This project is a clean and open-source yet modern alternative aiming to be tran
 
 ---
 
+## Screenshots
+
+<details>
+<summary>View screenshots</summary>
+
+<img width="3440" height="1440" alt="ClickGUI" src="screenshots/Screenshot%202026-06-22%20at%206.57.01%E2%80%AFPM.png" />
+<img width="3440" height="1440" alt="ClickGUI module settings" src="screenshots/Screenshot%202026-06-22%20at%206.57.27%E2%80%AFPM.png" />
+<img width="3440" height="1440" alt="In-game PVP" src="screenshots/Screenshot%202026-06-21%20at%207.55.50%E2%80%AFPM.png" />
+
+</details>
+
+---
+
 ## FAQ
 
 <details>

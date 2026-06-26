@@ -10,6 +10,10 @@ import dev.leonetic.features.modules.client.TargetsModule;
 import dev.leonetic.features.modules.world.SpeedMineModule;
 import dev.leonetic.features.settings.Setting;
 import dev.leonetic.util.MathUtil;
+import dev.leonetic.util.PlaceUtil;
+import dev.leonetic.util.inventory.InventoryUtil;
+import dev.leonetic.util.inventory.Result;
+import dev.leonetic.util.inventory.ResultType;
 import dev.leonetic.util.render.RenderUtil;
 import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap;
 import net.minecraft.core.BlockPos;
@@ -18,13 +22,16 @@ import net.minecraft.network.protocol.game.ClientboundBlockDestructionPacket;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EquipmentSlot;
+import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 
 import java.awt.Color;
+import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.Queue;
@@ -47,6 +54,9 @@ public class AutoMineModule extends Module {
     private final Setting<Boolean> antiSurroundOuterSnap = bool("OuterSnap", true);
     private final Setting<Double>  antiSurroundOuterCooldown = num("OuterCooldown", 0.1, 0.0, 1.0);
 
+    private final Setting<Boolean> glassPush     = bool("GlassPush", false);
+    private final Setting<Integer> glassAttempts = num("GlassAttempts", 2, 1, 5);
+
     private final Setting<Boolean> renderDebugScores = bool("DebugScores", false).setPage("Render");
 
     private Player targetPlayer = null;
@@ -56,6 +66,9 @@ public class AutoMineModule extends Module {
     private long lastOuterPlaceTime = 0;
 
     private boolean isTerrainFight = false;
+
+    private BlockPos glassTargetPos = null;
+    private int glassUsedAttempts = 0;
 
     private final Long2LongOpenHashMap enemyBreaking = new Long2LongOpenHashMap();
     private static final long ENEMY_BREAK_TTL_MS = 1000;
@@ -70,6 +83,7 @@ public class AutoMineModule extends Module {
                 || antiSurroundMode.getValue() == AntiSurroundMode.Outer);
         antiSurroundOuterCooldown.setVisibility(v -> antiSurroundMode.getValue() == AntiSurroundMode.Auto
                 || antiSurroundMode.getValue() == AntiSurroundMode.Outer);
+        glassAttempts.setVisibility(v -> glassPush.getValue());
     }
 
     @Override
@@ -88,6 +102,7 @@ public class AutoMineModule extends Module {
         target1 = target2 = null;
         ignorePos = null;
         enemyBreaking.clear();
+        resetGlass();
     }
 
     @Subscribe
@@ -200,6 +215,8 @@ public class AutoMineModule extends Module {
         targetPlayer = selectTarget();
         if (targetPlayer == null) return;
 
+        handleGlassPush(mine);
+
         if (mine.hasDelayedDestroy() && selfHeadBlock.is(Blocks.OBSIDIAN) && selfFeetBlock.isAir()
                 && selfHeadPos.equals(mine.getRebreakBlockPos())) {
             return;
@@ -271,6 +288,66 @@ public class AutoMineModule extends Module {
                 && p.getItemBySlot(EquipmentSlot.CHEST).isEmpty()
                 && p.getItemBySlot(EquipmentSlot.LEGS).isEmpty()
                 && p.getItemBySlot(EquipmentSlot.FEET).isEmpty();
+    }
+
+    private void handleGlassPush(SpeedMineModule mine) {
+        if (!glassPush.getValue()) { resetGlass(); return; }
+
+        AutoCrystalModule crystal = Homovore.moduleManager.getModuleByClass(AutoCrystalModule.class);
+        if (crystal == null || !crystal.isEnabled()) { resetGlass(); return; }
+
+        if (!mine.canRebreakRebreakBlock()) { resetGlass(); return; }
+        BlockPos pos = mine.getRebreakBlockPos();
+        if (pos == null) { resetGlass(); return; }
+
+        if (!isGoodRebreak(pos, inBedrockCase()) || !crystal.isDesirablePlacement(pos)) {
+            resetGlass();
+            return;
+        }
+
+        if (!pos.equals(glassTargetPos)) {
+            glassTargetPos = pos.immutable();
+            glassUsedAttempts = 0;
+        }
+
+        if (!itemInCrystalSpot(pos)) {
+
+            if (glassUsedAttempts > 0 && mc.level.getBlockState(pos).isAir()) {
+                crystal.preplaceCrystal(pos, true);
+            }
+            glassUsedAttempts = 0;
+            return;
+        }
+
+        if (glassUsedAttempts >= glassAttempts.getValue()) return;
+
+        if (!mc.level.getBlockState(pos).isAir()) return;
+
+        if (placeGlass(pos)) {
+            glassUsedAttempts++;
+        }
+    }
+
+    private boolean itemInCrystalSpot(BlockPos airPos) {
+        AABB box = new AABB(airPos).expandTowards(0, 1, 0);
+        for (Entity e : mc.level.getEntities((Entity) null, box)) {
+            if (e instanceof ItemEntity) return true;
+        }
+        return false;
+    }
+
+    private boolean placeGlass(BlockPos pos) {
+        Result glass = InventoryUtil.find(Items.GLASS, EnumSet.of(ResultType.HOTBAR));
+        if (!glass.found()) return false;
+        if (!PlaceUtil.canPlace(pos)) return false;
+        if (!Homovore.placementManager.enqueue(pos, glass.slot())) return false;
+        Homovore.placementManager.flushQueue();
+        return true;
+    }
+
+    private void resetGlass() {
+        glassTargetPos = null;
+        glassUsedAttempts = 0;
     }
 
     private void findTargetBlocks() {

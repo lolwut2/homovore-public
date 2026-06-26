@@ -946,6 +946,44 @@ public class AutoCrystalModule extends Module {
         return crystalPlaces.get(airPos.asLong()) != pendingTs;
     }
 
+    public boolean isDesirablePlacement(BlockPos airPos) {
+        if (nullCheck()) return false;
+
+        BlockPos base = airPos.below();
+        BlockState baseState = mc.level.getBlockState(base);
+        if (!baseState.is(Blocks.OBSIDIAN) && !baseState.is(Blocks.BEDROCK)) return false;
+
+        int bx = airPos.getX(), by = airPos.getY(), bz = airPos.getZ();
+        Vec3 eye = mc.player.getEyePosition(1.0f);
+        if (sqDistToBox(eye, bx, by, bz, bx + 1, by + 1, bz + 1) > PLACE_RANGE * PLACE_RANGE) return false;
+
+        double cx = bx + 0.5, cy = by, cz = bz + 0.5;
+        if (sqDistToBox(bestReachEye(new AABB(cx - 1, cy, cz - 1, cx + 1, cy + 2, cz + 1)),
+                cx - 1, cy, cz - 1, cx + 1, cy + 2, cz + 1) > BREAK_RANGE * BREAK_RANGE) return false;
+
+        Vec3 crystalCenter = new Vec3(cx, cy, cz);
+        float playerHealth = mc.player.getHealth() + mc.player.getAbsorptionAmount();
+        if (!selfDamageOk(crystalCenter, null, maxSelfDamage.getValue(), playerHealth)) return false;
+
+        TargetsModule targets = Homovore.moduleManager.getModuleByClass(TargetsModule.class);
+        List<TargetCache> potentialTargets = collectTargets(targets, PLACE_RANGE + 12.0);
+        for (int i = 0, n = potentialTargets.size(); i < n; i++) {
+            TargetCache tc = potentialTargets.get(i);
+            if (tc.pos.distanceToSqr(crystalCenter) > 144.0) continue;
+            if (calcDamage(tc, crystalCenter) >= getDynamicMin(tc.hp, tc.abs, tc.armorBroken)) return true;
+            if (antiSurround.getValue() && isFeetAdjacent(tc.pos, airPos)) return true;
+        }
+        return false;
+    }
+
+    private boolean isFeetAdjacent(Vec3 targetPos, BlockPos airPos) {
+        BlockPos feet = BlockPos.containing(targetPos.x, targetPos.y, targetPos.z);
+        if (feet.getY() != airPos.getY()) return false;
+        int dx = airPos.getX() - feet.getX();
+        int dz = airPos.getZ() - feet.getZ();
+        return (Math.abs(dx) == 1 && dz == 0) || (Math.abs(dz) == 1 && dx == 0);
+    }
+
     private void ageCrystalPlaces() {
         long now = System.currentTimeMillis();
         LongIterator it = crystalPlaces.keySet().iterator();

@@ -193,23 +193,52 @@ public class SwapManager extends Feature {
             req.action.accept(req.target);
             return true;
         }
-        SwapHandle h = acquire(req.id, req.priority, false, req.silent);
+
+        // Another swap is already holding the hotbar this tick. Don't fight it
+        // with a competing carried-item change (which would get denied by
+        // acquire and stall us) — click the item into the slot that swap is
+        // holding instead, act, then click back.
+        if (req.silent || blockedByActiveHold(req.id, req.priority)) {
+            return altSwap(req);
+        }
+
+        SwapHandle h = acquire(req.id, req.priority, false, false);
         if (h == null) return false;
         int last = h.originalSlot;
         try {
-            boolean swapped = req.silent ? InventoryUtil.swapSilent(req.target) : InventoryUtil.swap(req.target);
-            if (!swapped) return false;
+            if (!InventoryUtil.swap(req.target)) return false;
             try {
                 req.action.accept(req.target);
             } finally {
-                if (req.silent) InventoryUtil.swapBackSilent(req.target);
-                else InventoryUtil.swapBack(req.target, last);
+                InventoryUtil.swapBack(req.target, last);
             }
             return true;
         } finally {
             if (active == h) resumeOrClear();
             h.released = true;
         }
+    }
+
+    private boolean altSwap(SwapRequest req) {
+        int held = serverSlot();
+        if (!InventoryUtil.altSwapInto(req.target, held)) return false;
+        try {
+            req.action.accept(req.target);
+        } finally {
+            InventoryUtil.altSwapInto(req.target, held);
+        }
+        return true;
+    }
+
+    // True when a non-lease swap actively owns the hotbar right now. Leases
+    // (e.g. Offhand's gapple hold) are borrowable and handled by acquire.
+    public boolean isHotbarBusy() {
+        return active != null && !active.released && !active.lease;
+    }
+
+    private boolean blockedByActiveHold(String id, int priority) {
+        return active != null && !active.released && !active.lease
+                && !active.id.equals(id) && active.priority >= priority;
     }
 
     public SwapHandle acquire(String id, int priority) {
@@ -271,6 +300,14 @@ public class SwapManager extends Feature {
 
     public boolean holdsActive(SwapHandle h) {
         return h != null && active == h && !h.released;
+    }
+
+    // True while the handle is still ours: active, or merely suspended by a
+    // higher-priority borrow that will resume it. Unlike holdsActive, this stays
+    // true across a borrow, so a lease holder can keep its reservation instead of
+    // discarding it (and then being denied re-acquisition by the active swap).
+    public boolean holds(SwapHandle h) {
+        return h != null && !h.released && (active == h || suspended == h);
     }
 
     public boolean isBlocked(int priority) {

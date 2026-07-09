@@ -95,6 +95,20 @@ public final class InventoryUtil implements Util {
         return true;
     }
 
+    // Container-click the found item into a specific hotbar slot (a "click slot
+    // on top of the hotbar update") instead of changing the carried slot. Used
+    // when another swap already owns the hotbar this tick: we move the item into
+    // the slot that swap is holding. Calling it again with the same args restores
+    // the two slots, since ClickType.SWAP is its own inverse.
+    public static boolean altSwapInto(Result result, int hotbarSlot) {
+        if (hotbarSlot < 0 || hotbarSlot > 8 || !result.found()) return false;
+        if (result.type() == ResultType.OFFHAND) return true;
+        if (result.type() == ResultType.HOTBAR && result.slot() == hotbarSlot) return true;
+        if (result.type() != ResultType.HOTBAR && result.type() != ResultType.INVENTORY) return false;
+        swapToHotbarSlot(result.slot(), hotbarSlot);
+        return true;
+    }
+
     public static boolean swapBackSilent(Result result) {
         return swapSilent(result);
     }

@@ -27,6 +27,7 @@ import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.inventory.ClickType;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.AnvilBlock;
 import net.minecraft.world.level.block.BaseEntityBlock;
@@ -198,8 +199,7 @@ public class PlacementManager extends Feature {
         placing = true;
         try {
             int originalSlot = InventoryUtil.selected();
-            sendBurst(ready, burstSlot, originalSlot);
-            if (burstSlot != originalSlot) {
+            if (sendBurst(ready, burstSlot, originalSlot)) {
                 mc.getConnection().send(new ServerboundSetCarriedItemPacket(originalSlot));
             }
         } finally {
@@ -243,8 +243,7 @@ public class PlacementManager extends Feature {
         placing = true;
         try {
             int originalSlot = InventoryUtil.selected();
-            sendBurst(ready, hotbarSlot, originalSlot);
-            if (hotbarSlot != originalSlot) {
+            if (sendBurst(ready, hotbarSlot, originalSlot)) {
                 mc.getConnection().send(new ServerboundSetCarriedItemPacket(originalSlot));
             }
         } finally {
@@ -382,10 +381,24 @@ public class PlacementManager extends Feature {
         return new PreparedClick(pos, neighbour, hitPos, hitSide, task.hotbarSlot());
     }
 
-    private void sendBurst(List<PreparedClick> group, int slot, int currentSelected) {
+    /**
+     * Sends the offhand-swap placement burst. Returns true if it changed the
+     * server carried slot (the caller must then restore it). When another swap
+     * already owns the hotbar this tick, the block item is clicked into the held
+     * slot instead of issuing a competing carried-item change, and the carried
+     * slot is left untouched (returns false).
+     */
+    private boolean sendBurst(List<PreparedClick> group, int slot, int currentSelected) {
         var conn = mc.getConnection();
 
-        if (slot != currentSelected) {
+        int heldSlot = Homovore.swapManager.serverSlot();
+        boolean altSwap = Homovore.swapManager.isHotbarBusy() && heldSlot >= 0 && heldSlot <= 8;
+
+        boolean moved = false;
+        if (altSwap) {
+            moved = heldSlot != slot;
+            if (moved) InventoryUtil.swapToHotbarSlot(slot, heldSlot);
+        } else if (slot != currentSelected) {
             conn.send(new ServerboundSetCarriedItemPacket(slot));
         }
 
@@ -412,6 +425,12 @@ public class PlacementManager extends Feature {
                 BlockPos.ZERO,
                 Direction.DOWN
         ));
+
+        if (altSwap) {
+            if (moved) InventoryUtil.swapToHotbarSlot(slot, heldSlot);
+            return false;
+        }
+        return slot != currentSelected;
     }
 
     private record PreparedClick(BlockPos pos, BlockPos neighbour, Vec3 hitPos, Direction hitSide, int hotbarSlot) {}
@@ -510,8 +529,7 @@ public class PlacementManager extends Feature {
         placing = true;
         try {
             int originalSlot = InventoryUtil.selected();
-            sendBurst(List.of(click), hotbarSlot, originalSlot);
-            if (hotbarSlot != originalSlot) {
+            if (sendBurst(List.of(click), hotbarSlot, originalSlot)) {
                 mc.getConnection().send(new ServerboundSetCarriedItemPacket(originalSlot));
             }
         } finally {
@@ -583,6 +601,72 @@ public class PlacementManager extends Feature {
         }
         markSwapSequenceUsed();
 
+        return true;
+    }
+
+    /**
+     * One-tick silent break + crystal place. Holds the pickaxe in the mainhand
+     * and the crystal in the offhand simultaneously, runs the block-break burst,
+     * places a crystal from the offhand, then restores both hands. Unlike
+     * {@link #placeCrystalOffhand}, the crystal reaches the offhand via a
+     * container click (not SWAP_ITEM_WITH_OFFHAND), so the mainhand stays free to
+     * hold the pickaxe — letting us break a block and place a crystal in the same
+     * tick.
+     *
+     * @param pickaxeSlot hotbar slot (0-8) of the pickaxe to break with
+     * @param breakBurst  emits the block-break packets; run while the pickaxe is held
+     * @param crystalSlot hotbar slot (0-8) holding the end crystal
+     * @param crystalBase obsidian/bedrock the crystal is placed on
+     * @param trustBase   skip the obsidian/bedrock check on the base
+     */
+    public boolean breakThenPlaceCrystalOffhand(int pickaxeSlot, Runnable breakBurst,
+                                                int crystalSlot, BlockPos crystalBase, boolean trustBase) {
+        if (nullCheck()) return false;
+        if (mc.player.containerMenu.containerId != 0) return false;
+        if (!InventoryUtil.cursor().isEmpty()) return false;
+        if (pickaxeSlot < 0 || pickaxeSlot > 8 || crystalSlot < 0 || crystalSlot > 8) return false;
+        if (pickaxeSlot == crystalSlot) return false;
+        if (!mc.player.getInventory().getItem(crystalSlot).is(Items.END_CRYSTAL)) return false;
+
+        OffhandModule offhand = Homovore.moduleManager.getModuleByClass(OffhandModule.class);
+        if (offhand != null && offhand.shouldDeferForEat()) return false;
+
+        // This combo owns the hotbar for the tick; don't fight another active swap.
+        if (Homovore.swapManager.isHotbarBusy()) return false;
+
+        if (hasPending()) flushQueue();
+        if (!swapSequenceAvailable()) return false;
+
+        BlockHitResult hit = computeCrystalHit(crystalBase, trustBase);
+        if (hit == null) return false;
+
+        var conn = mc.getConnection();
+        if (conn == null) return false;
+
+        int originalSlot = Homovore.swapManager.serverSlot();
+        boolean needSlotSwap = pickaxeSlot != originalSlot;
+
+        // 1. Crystal -> offhand via container click (mainhand stays free).
+        InventoryUtil.swapToOffhand(crystalSlot);
+        // 2. Pickaxe -> mainhand.
+        if (needSlotSwap) conn.send(new ServerboundSetCarriedItemPacket(pickaxeSlot));
+
+        try {
+            // 3. Break the block with the pickaxe now held in the mainhand.
+            if (breakBurst != null) breakBurst.run();
+
+            // 4. Place the crystal from the offhand.
+            try (var handler = ((ClientLevelAccessor) mc.level)
+                    .homovore$getBlockStatePredictionHandler().startPredicting()) {
+                conn.send(new ServerboundUseItemOnPacket(InteractionHand.OFF_HAND, hit, handler.currentSequence()));
+            }
+        } finally {
+            // 5. Restore mainhand, then 6. restore offhand (swapToOffhand is its own inverse).
+            if (needSlotSwap) conn.send(new ServerboundSetCarriedItemPacket(originalSlot));
+            InventoryUtil.swapToOffhand(crystalSlot);
+        }
+
+        markSwapSequenceUsed();
         return true;
     }
 

@@ -148,12 +148,15 @@ public class SpeedMineModule extends Module {
     }
 
     private boolean ensureMineSwap() {
-        if (mineSwapHandle != null && !mineSwapHandle.isReleased()
-                && !Homovore.swapManager.holdsActive(mineSwapHandle)) {
+        // Keep the lease while it's still ours (active OR suspended by a borrow).
+        // Discarding a merely-suspended lease would force a re-acquire that a
+        // higher-priority active swap denies, dropping the pickaxe hold on the
+        // delayed-destroy block mid-dig.
+        if (mineSwapHandle != null && !Homovore.swapManager.holds(mineSwapHandle)) {
             Homovore.swapManager.release(mineSwapHandle);
             mineSwapHandle = null;
         }
-        if (mineSwapHandle == null || mineSwapHandle.isReleased()) {
+        if (mineSwapHandle == null) {
             mineSwapHandle = Homovore.swapManager.acquireLease("SpeedMine", MINE_SWAP_PRIORITY);
             if (mineSwapHandle == null) return false;
         }

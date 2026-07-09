@@ -448,8 +448,22 @@ public class AutoCrystalModule extends Module {
         }
     }
 
+    // A reactive (packet-driven) placement can leave our 68-priority swap handle
+    // held across the tick boundary. Release it at the very start of the tick,
+    // before lower-priority miners (SpeedMine@PreTick 10) try to acquire the
+    // hotbar — otherwise our lingering handle denies their mine-swap and
+    // two-block mining stalls.
+    @Subscribe(priority = 1000)
+    private void onPreTickReleaseStale(PreTickEvent event) {
+        releasePendingSwap();
+    }
+
     @Subscribe(priority = -100)
     private void onPreTickRestore(PreTickEvent event) {
+        releasePendingSwap();
+    }
+
+    private void releasePendingSwap() {
         if (pendingSwapHandle != null) {
             Homovore.swapManager.release(pendingSwapHandle);
             pendingSwapHandle = null;

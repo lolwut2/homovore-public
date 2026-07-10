@@ -599,6 +599,14 @@ public class AutoMineModule extends Module {
         return score;
     }
 
+    @Override
+    public void onRender3D(Render3DEvent event) {
+        if (nullCheck() || glassTargetPos == null) return;
+
+        RenderUtil.drawBoxFilled(event.getMatrix(), glassTargetPos, new Color(255, 255, 255, 50));
+        RenderUtil.drawBox(event.getMatrix(), glassTargetPos, new Color(255, 255, 255, 255), 1.5f);
+    }
+
     @Subscribe
     private void onRenderDebug(Render3DEvent event) {
         if (nullCheck() || !renderDebugScores.getValue() || targetPlayer == null) return;

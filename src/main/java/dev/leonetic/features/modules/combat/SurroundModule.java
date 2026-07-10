@@ -738,7 +738,12 @@ public class SurroundModule extends Module {
 
     private boolean canRocket(BlockPos pos, long now) {
         return (isHot(pos, now) || crystalProtect.getValue() && hasCrystalAt(pos))
-                && isFullBlock(pos.above()) && isFullBlock(pos.below()) && hasFireworkCornerSupport(pos);
+                && isFullBlock(pos.above()) && isCrystalBase(pos.below()) && hasFireworkCornerSupport(pos);
+    }
+
+    private boolean isCrystalBase(BlockPos pos) {
+        BlockState state = mc.level.getBlockState(pos);
+        return state.is(Blocks.OBSIDIAN) || state.is(Blocks.BEDROCK);
     }
 
     private boolean hasCrystalAt(BlockPos pos) {

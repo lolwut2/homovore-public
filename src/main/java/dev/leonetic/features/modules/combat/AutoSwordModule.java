@@ -40,6 +40,7 @@ public class AutoSwordModule extends Module {
     private static final double RANGE = 3.0;
 
     private final Setting<Double> delay = num("Delay", 0.92, 0.0, 1.0);
+    private final Setting<Boolean> swing = bool("Swing", true);
     private final Setting<Boolean> render = bool("Render", true);
     private final Setting<TpsMode> tpsMode = mode("TPS", TpsMode.LATEST);
 
@@ -148,7 +149,7 @@ public class AutoSwordModule extends Module {
             }
 
             mc.gameMode.attack(mc.player, currentTarget);
-            mc.player.swing(InteractionHand.MAIN_HAND);
+            if (swing.getValue()) mc.player.swing(InteractionHand.MAIN_HAND);
 
             if (needSwap) {
                 mc.getConnection().send(new ServerboundSetCarriedItemPacket(originalSlot));

@@ -9,6 +9,7 @@ import dev.leonetic.util.PlaceUtil;
 import dev.leonetic.event.impl.render.Render3DEvent;
 import dev.leonetic.event.system.Subscribe;
 import dev.leonetic.features.modules.Module;
+import dev.leonetic.features.modules.render.BreakIndicatorsModule;
 import dev.leonetic.features.modules.world.SpeedMineModule;
 import dev.leonetic.features.settings.Setting;
 import dev.leonetic.util.inventory.InventoryUtil;
@@ -36,10 +37,12 @@ public class SurroundModule extends Module {
 
     private final Setting<Boolean> attack        = bool("Attack", true).setPage("General");
 
+    private final Setting<Boolean> mineProtect   = bool("MineProtect", true).setPage("General");
+
     private final Setting<Boolean> fireworks     = bool("Fireworks", true).setPage("General");
-    private final Setting<Boolean> crystalReact  = bool("CrystalReact", false).setPage("General");
-    private final Setting<Boolean> safe          = bool("Safe", false).setPage("General");
-    private final Setting<Boolean> keepReplacing = bool("KeepReplacing", false).setPage("General");
+    private final Setting<Boolean> crystalProtect = bool("CrystalProtect", true).setPage("General");
+    private final Setting<Boolean> safeRocket    = bool("SafeRocket", false).setPage("General");
+    private final Setting<Boolean> keepReplacing = bool("KeepReplacing", true).setPage("General");
 
     private final Setting<Boolean> test          = bool("Test", false).setPage("General");
 
@@ -89,7 +92,7 @@ public class SurroundModule extends Module {
     private final Map<BlockPos, Integer> breakCounts = new ConcurrentHashMap<>();
     private static final long REBREAK_WINDOW_MS = 20 * 50;
     private static final int REBREAK_THRESHOLD = 3;
-    private static final int SAFE_REBREAK_THRESHOLD = 4;
+    private static final int SAFE_REBREAK_THRESHOLD = 3;
 
     private final PlacementManager.PlacementListener airRefillListener = (pos, nowAir) -> {
 
@@ -109,8 +112,10 @@ public class SurroundModule extends Module {
         if (speedMineClaims(pos)) return;
 
         if (cachedFireworkSlot >= 0 && canRocket(pos, System.currentTimeMillis())) {
-            fireworkPoses.add(pos.immutable());
-            if (!keepReplacing.getValue()) return;
+            if (!keepReplacing.getValue()) {
+                fireworkPoses.add(pos.immutable());
+                return;
+            }
         }
 
         if (!wanted) return;
@@ -250,6 +255,10 @@ public class SurroundModule extends Module {
             computeExtend(feetPositions, placePoses, now);
         }
 
+        if (mineProtect.getValue()) {
+            applyMineProtect(feetPositions, placePoses);
+        }
+
         if (selfTrap.getValue() && selfTrapHead.getValue()) {
             boolean prone = crawlTrap.getValue()
                     && (mc.player.isVisuallyCrawling() || mc.player.isFallFlying());
@@ -367,7 +376,7 @@ public class SurroundModule extends Module {
     private boolean speedMineClaims(BlockPos pos) {
         SpeedMineModule mine = Homovore.moduleManager.getModuleByClass(SpeedMineModule.class);
         if (mine == null || !mine.isEnabled() || !mine.alreadyBreaking(pos)) return false;
-        return !test.getValue() || !mine.canRebreakRebreakBlock() || !pos.equals(mine.getRebreakBlockPos());
+        return !test.getValue();
     }
 
     private boolean intersectsCrystal(BlockPos pos) {
@@ -556,6 +565,58 @@ public class SurroundModule extends Module {
         }
     }
 
+    private void applyMineProtect(List<BlockPos> feetPositions, List<BlockPos> placePoses) {
+        if (test.getValue()) {
+            SpeedMineModule mine = Homovore.moduleManager.getModuleByClass(SpeedMineModule.class);
+            if (mine != null && mine.isEnabled()) {
+                applyMineProtectBlock(feetPositions, placePoses, mine.getRebreakBlockPos());
+                applyMineProtectBlock(feetPositions, placePoses, mine.getDelayedDestroyBlockPos());
+            }
+        }
+
+        BreakIndicatorsModule indicators = Homovore.moduleManager.getModuleByClass(BreakIndicatorsModule.class);
+        if (indicators == null || !indicators.isEnabled()) return;
+
+        for (BreakIndicatorsModule.BreakInfo info : indicators.getActiveBreaksSnapshot().values()) {
+            Player player = info.player();
+            if (player == null || player == mc.player || Homovore.friendManager.isFriend(player)) continue;
+
+            applyMineProtectBlock(feetPositions, placePoses, info.pos());
+        }
+    }
+
+    private void applyMineProtectBlock(List<BlockPos> feetPositions, List<BlockPos> placePoses, BlockPos mined) {
+        if (mined == null) return;
+
+        for (BlockPos feet : feetPositions) {
+            if (mined.getY() != feet.getY()) continue;
+            int dx = mined.getX() - feet.getX();
+            int dz = mined.getZ() - feet.getZ();
+            if (Math.abs(dx) + Math.abs(dz) != 1) continue;
+
+            addMineProtectIfReplaceable(placePoses, mined.above());
+            addMineProtectIfReplaceable(placePoses, mined.below());
+            if (dx != 0) {
+                addMineProtectIfReplaceable(placePoses, feet.offset(dx, 0, 1));
+                addMineProtectIfReplaceable(placePoses, feet.offset(dx, 0, -1));
+                addMineProtectIfReplaceable(placePoses, feet.offset(dx * 2, 0, 0));
+            } else {
+                addMineProtectIfReplaceable(placePoses, feet.offset(1, 0, dz));
+                addMineProtectIfReplaceable(placePoses, feet.offset(-1, 0, dz));
+                addMineProtectIfReplaceable(placePoses, feet.offset(0, 0, dz * 2));
+            }
+        }
+    }
+
+    private void addMineProtectIfReplaceable(List<BlockPos> out, BlockPos pos) {
+        BlockState state = mc.level.getBlockState(pos);
+        if (state.isAir() || state.canBeReplaced()) {
+            wantedPoses.add(pos.immutable());
+            extendPoses.add(pos.immutable());
+            out.add(pos);
+        }
+    }
+
     private void addExtendIfReplaceable(List<BlockPos> out, BlockPos pos) {
         BlockState below = mc.level.getBlockState(pos.below());
         if (!below.is(Blocks.OBSIDIAN) && !below.is(Blocks.BEDROCK)) return;
@@ -662,12 +723,12 @@ public class SurroundModule extends Module {
         if (!canRocket(pos, now)) return false;
         if (speedMineClaims(pos)) return false;
         if (hasLiveFireworkAt(pos)) {
-            fireworkPoses.add(pos.immutable());
+            if (!keepReplacing.getValue()) fireworkPoses.add(pos.immutable());
             return !keepReplacing.getValue();
         }
         Long last = fireworkDeployedAt.get(pos);
         if (last != null && now - last < FIREWORK_REDEPLOY_COOLDOWN_MS) {
-            fireworkPoses.add(pos.immutable());
+            if (!keepReplacing.getValue()) fireworkPoses.add(pos.immutable());
             return !keepReplacing.getValue();
         }
         fireworkPoses.add(pos.immutable());
@@ -676,7 +737,7 @@ public class SurroundModule extends Module {
     }
 
     private boolean canRocket(BlockPos pos, long now) {
-        return (isHot(pos, now) || crystalReact.getValue() && hasCrystalAt(pos))
+        return (isHot(pos, now) || crystalProtect.getValue() && hasCrystalAt(pos))
                 && isFullBlock(pos.above()) && isFullBlock(pos.below()) && hasFireworkCornerSupport(pos);
     }
 
@@ -712,7 +773,7 @@ public class SurroundModule extends Module {
     }
 
     private boolean isHot(BlockPos pos, long now) {
-        if (safe.getValue()) return breakCounts.getOrDefault(pos, 0) >= SAFE_REBREAK_THRESHOLD;
+        if (safeRocket.getValue()) return breakCounts.getOrDefault(pos, 0) >= SAFE_REBREAK_THRESHOLD;
 
         Deque<Long> times = breakTimes.get(pos);
         if (times == null) return false;
